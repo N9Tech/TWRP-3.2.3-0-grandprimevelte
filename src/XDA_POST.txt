@@ -1,0 +1,91 @@
+==========================================================
+ XDA POST — rev. 10 — copy/paste into the thread editor
+==========================================================
+
+TITLE:
+[RECOVERY][3.2.3][SM-G531F] TWRP 3.2.3-0 for Galaxy Grand Prime VE (grandprimevelte / PXA1908)
+
+----------------------------------------------------------
+BBCODE BODY
+----------------------------------------------------------
+[SIZE=5][B]TWRP 3.2.3-0 for the Samsung Galaxy Grand Prime VE (SM-G531F)[/B][/SIZE]
+
+Official TWRP stopped at [B]2.8.7.1[/B] for this device; the newest build that ever booted was a 3.0.2. This is a working [B]3.2.3-0[/B] with the full touch UI at 540x960.
+
+[CODE]Device    : SM-G531F  (grandprimevelte)
+SoC       : Marvell PXA1908, ARMv7, 1 GB RAM
+Display   : 540x960, mmp-fb, 32 bpp, triple-buffered
+Android   : 5.1.1
+Recovery  : TWRP 3.2.3-0 (userspace 3.2.3, kernel = stock G531F)
+Image     : 11 225 088 bytes      md5 .tar 25e145ae690388246aa280bc29a25a0f
+[/CODE]
+
+[B][SIZE=4]Downloads[/SIZE][/B]
+
+[LIST]
+[*][B]Odin package (AP)[/B] - TWRP-3.2.3-0-G531F.img.tar (11.2 MB) - md5 [B]25e145ae690388246aa280bc29a25a0f[/B]
+[*][B]Raw image[/B] - recovery.img (11.2 MB) - md5 [B]86045043fd05ce9ac7f6a3e691aa9a6e[/B]
+[*][B]Source / build kit[/B] - C sources, tooling, payload, full write-up
+[/LIST]
+
+[B][SIZE=4]How to flash[/SIZE][/B]
+
+[LIST=1]
+[*]Back up [B]EFS[/B] first (TWRP: Backup > EFS). It holds your IMEI.
+[*]Odin > [B]AP[/B] > select the .tar. Untick [I]Auto Reboot[/I] and [I]Re-Partition[/I].
+[*]Flash, wait for [B]PASS[/B], pull the battery, then [B]Vol+ + Home + Power[/B].
+[*]It boots straight to the TWRP menu, ~6 s. (Revisions up to 10 ran a white/green/red framebuffer self-test first; it is now off by default, see fbfix.conf.)
+[/LIST]
+
+[B][SIZE=4]What works[/SIZE][/B]
+
+[LIST]
+[*]Touch, theme, all standard TWRP operations (backup / restore / wipe / install / terminal)
+[*][B]adb push[/B] and [B]adb sideload[/B] (sideload fixed in rev. 10, see below)
+[*]microSD, USB-OTG storage, ADB backup FIFO
+[/LIST]
+
+[B]Not working: MTP[/B] (drag & drop in Windows gives [I]could not open MTP driver, errno 2[/I]). The stock PXA1908 kernel has [B]no USB functionfs[/B] ([I]# CONFIG_USB_FUNCTIONFS is not set[/I]) and TWRP's MTP needs it. Kernel limitation, not fixable from the ramdisk - use [I]adb push[/I].
+
+[B][SIZE=4]Why this one works (technical)[/SIZE][/B]
+
+[B]1) Kernel[/B] - Marvell never released PXA1908 sources, so kernel and dt.img are the stock G531F ones, byte for byte; only the ramdisk is TWRP 3.2.3.
+
+[B]2) The framebuffer bug[/B] - measured geometry: [I]540x960, xres_virtual 544, yres_virtual 2880, line_length 2176, smem_len 6266880[/I]. minui enables double buffering when [I]yres*line_length*2 <= smem_len[/I], which is true here, so it flips with [I]yoffset = n*960[/I] inside a [B]triple[/B] buffer. The driver takes the ioctl but keeps scanning frame 0: frozen logo / grey band. An LD_PRELOAD shim reports [I]smem_len = line_length*yres[/I] (one frame) while keeping the real line_length, so minui uses its single-buffer path and memcpy's into fb0 with the right stride. Never hardcode 2160 - this panel is 2176.
+
+[B]3) The bug that cost days: the stock kernel silently truncates the initramfs.[/B] It unpacks only ~86% of the cpio and returns no error. Archive = 15,034,368 bytes, unpacking stops at [B]13,021,016[/B] bytes, right after [I]twres/fonts/DroidSansFallback.ttf[/I]. Everything past that never exists at runtime: the 57 theme PNGs, 4 of 5 fonts, and all of [I]twres/languages/[/I] including [I]en.xml[/I]. Symptoms escalate: grey band -> [I]Failed to load truetype face ... : 1[/I] -> [B]SIGSEGV right after "Loading page main2"[/B] (the log just stops, because TWRP's stdio buffer dies with the crash).
+Fixed by shipping the theme as [I]/sbin/theme.tar[/I] - /sbin is at the [B]beginning[/B] of the archive, always unpacked - and rebuilding /twres from it at every boot.
+
+[B]4) adb sideload (rev. 10)[/B] - it used to die with [I]mount: No such file or directory[/I]. [I]fuse_sideload.cpp[/I] mounts /dev/fuse on [B]/sideload[/B]; the G531F 3.0.2 init.rc never creates that directory (TWRP's own init.rc does), so mount(2) fails with ENOENT while the kernel FUSE support is perfectly fine ([I]CONFIG_FUSE_FS=y[/I]). One [I]mkdir[/I] fixes it.
+
+[B][SIZE=4]If you want to port this elsewhere[/SIZE][/B]
+
+The image keeps its debugging payload on purpose:
+
+[CODE]adb pull /tmp/fb.txt        # boot log: fb geometry, theme check, ASCII screen dump
+adb pull /tmp/crash.txt     # if TWRP crashes: ARM registers, fault address, /proc/self/maps
+adb shell sh /sbin/fbfix_ctl.sh info|shot|probe|dump|plain|hook|set[/CODE]
+
+[I]/sbin/fbfix.conf[/I] toggles the shim ([I]mode[/I]), the panning ([I]pan[/I]) and the colour self-test ([I]probe=1[/I] if you want the white/green/red mire at boot).
+
+[B][SIZE=4]Credits[/SIZE][/B]
+
+TeamWin Recovery Project for TWRP 3.2.3 (GPLv3), and the 3.0.2 grandprimevelte build that provided the stock kernel reference. My own code (framebuffer shim, probes, tooling) is MIT and included in the source kit.
+
+[B][SIZE=4]Known limits[/SIZE][/B]
+
+[LIST]
+[*]UI languages: [B]en[/B] and [B]fr[/B] only (the others lived in the truncated part of the archive). English by default.
+[*]CJK fonts removed (4.4 MB) - no Japanese/Chinese/Korean text in the UI.
+[*]No MTP (kernel has no functionfs).
+[*]Kernel untouched: no new features, same Android 5.1.1 base.
+[/LIST]
+
+[B]Flash at your own risk.[/B] Tested on my SM-G531F after a full backup of EFS/boot/recovery.
+
+----------------------------------------------------------
+TIPS
+----------------------------------------------------------
+* Attach the two zips or host them on AndroidFileHost / MEGA, then edit the links.
+* Screenshots: hold Vol-Down in TWRP -> /sdcard/Pictures/Screenshots.
+* Mention "grandprimevelte" in the title for searchability.
